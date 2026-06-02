@@ -147,4 +147,20 @@ describe("Gardena autopilot LangGraph", () => {
     assert.equal(decision.track.primary, "AI x RWA");
     assert.equal(decision.track.secondary, "Consumer & Viral DApps");
   });
+
+  it("includes an AI advisor signal before deterministic policy enforcement", async () => {
+    const decision = await runAutopilotTick({
+      ...baseIntent,
+      currentStrategyId: "steady-rwa-usdy",
+      policy: {
+        ...baseIntent.policy,
+        allowedProtocols: ["Mantle RWA USDY Route", "Mantle mETH Yield Route"],
+      },
+    });
+
+    assert.ok(decision.aiAdvisor.marketSummary.includes(decision.selectedOpportunity.asset));
+    assert.ok(decision.aiAdvisor.riskNotes.length > 0);
+    assert.equal(decision.aiAdvisor.recommendedStrategyId, decision.selectedOpportunity.strategyId);
+    assert.match(decision.aiAdvisor.confidenceReason, /policy/i);
+  });
 });

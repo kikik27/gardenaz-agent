@@ -4,6 +4,7 @@ import { CROP_STRATEGIES } from "./config/crops";
 import { hashDecision } from "./nodes/log";
 import type {
   AgentContext,
+  AiAdvisorSignal,
   AutopilotAction,
   AutopilotDecision,
   AutopilotIntent,
@@ -68,6 +69,7 @@ export const AutopilotStateAnnotation = Annotation.Root({
   market: Annotation<{ opportunities: YieldOpportunity[] } | undefined>,
   rankedOpportunities: Annotation<ScoredYieldOpportunity[] | undefined>,
   selectedOpportunity: Annotation<ScoredYieldOpportunity | undefined>,
+  aiAdvisor: Annotation<AiAdvisorSignal | undefined>,
   policy: Annotation<PolicyDecision | undefined>,
   action: Annotation<AutopilotAction | undefined>,
   summary: Annotation<string | undefined>,
@@ -120,6 +122,96 @@ function rankStrategiesNode(state: AutopilotGraphState): AutopilotGraphUpdate {
   const rankedOpportunities = opportunities.map(rankOpportunity).sort((a, b) => b.score - a.score);
   const selectedOpportunity = rankedOpportunities.find((opportunity) => isPolicyEligible(state, opportunity)) ?? rankedOpportunities[0];
   return { rankedOpportunities, selectedOpportunity };
+}
+
+function buildFallbackAdvisor(state: AutopilotGraphState): AiAdvisorSignal {
+  const selected = state.selectedOpportunity;
+  if (!selected) throw new Error("AI advisor requires selected opportunity");
+  return {
+    provider: "fallback",
+    model: process.env.OPENAI_API_KEY ? (process.env.OPENAI_MODEL ?? "gpt-4o-mini") : "deterministic-rwa-advisor",
+    recommendedStrategyId: selected.strategyId,
+    marketSummary: `${selected.asset} route selected from Mantle RWA market: ${selected.marketCondition}.`,
+    riskNotes: [
+      `Risk level ${selected.riskLevel} stays behind user max risk ${state.intent.policy.maxRiskLevel}.`,
+      `${selected.protocol} must pass deterministic allowlist before execution.`,
+    ],
+    confidenceReason: `AI recommendation is advisory only; deterministic policy gate selected ${selected.strategyId}.`,
+  };
+}
+
+function sanitizeAdvisorSignal(state: AutopilotGraphState, input: Partial<AiAdvisorSignal>): AiAdvisorSignal {
+  const fallback = buildFallbackAdvisor(state);
+  const validStrategyIds = new Set(state.rankedOpportunities?.map((opportunity) => opportunity.strategyId) ?? []);
+  const recommendedStrategyId =
+    input.recommendedStrategyId && validStrategyIds.has(input.recommendedStrategyId)
+      ? input.recommendedStrategyId
+      : fallback.recommendedStrategyId;
+
+  return {
+    provider: input.provider === "llm" ? "llm" : fallback.provider,
+    model: input.model || fallback.model,
+    recommendedStrategyId,
+    marketSummary: input.marketSummary || fallback.marketSummary,
+    riskNotes: Array.isArray(input.riskNotes) && input.riskNotes.length > 0 ? input.riskNotes.slice(0, 4) : fallback.riskNotes,
+    confidenceReason: input.confidenceReason || fallback.confidenceReason,
+  };
+}
+
+async function callOpenAiAdvisor(state: AutopilotGraphState): Promise<AiAdvisorSignal | undefined> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return undefined;
+
+  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  const response = await fetch(process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are Gardena AI, an RWA DeFi farming advisor. Return strict JSON only. Recommend only known strategy IDs. Never bypass policy; policy gate remains deterministic.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            intent: state.intent,
+            selectedByDeterministicRanker: state.selectedOpportunity,
+            rankedOpportunities: state.rankedOpportunities,
+            requiredShape: {
+              recommendedStrategyId: "string",
+              marketSummary: "string mentioning asset/protocol",
+              riskNotes: ["string"],
+              confidenceReason: "string mentioning policy gate",
+            },
+          }),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) return undefined;
+  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) return undefined;
+  const parsed = JSON.parse(content) as Partial<AiAdvisorSignal>;
+  return sanitizeAdvisorSignal(state, { ...parsed, provider: "llm", model });
+}
+
+async function aiAdvisorNode(state: AutopilotGraphState): Promise<AutopilotGraphUpdate> {
+  try {
+    const llmSignal = await callOpenAiAdvisor(state);
+    return { aiAdvisor: llmSignal ?? buildFallbackAdvisor(state) };
+  } catch {
+    return { aiAdvisor: buildFallbackAdvisor(state) };
+  }
 }
 
 function policyNode(state: AutopilotGraphState): AutopilotGraphUpdate {
@@ -209,7 +301,7 @@ function simulateNode(state: AutopilotGraphState): AutopilotGraphUpdate {
 }
 
 function logNode(state: AutopilotGraphState): AutopilotGraphUpdate {
-  if (!state.market || !state.rankedOpportunities || !state.selectedOpportunity || !state.policy || !state.action || !state.summary || !state.createdAt) {
+  if (!state.market || !state.rankedOpportunities || !state.selectedOpportunity || !state.aiAdvisor || !state.policy || !state.action || !state.summary || !state.createdAt) {
     throw new Error("Autopilot log node requires complete state");
   }
 
@@ -223,6 +315,7 @@ function logNode(state: AutopilotGraphState): AutopilotGraphUpdate {
     JSON.stringify({
       intent: state.intent,
       selectedOpportunity: state.selectedOpportunity,
+      aiAdvisor: state.aiAdvisor,
       policy: state.policy,
       action: state.action,
       registries,
@@ -235,6 +328,7 @@ function logNode(state: AutopilotGraphState): AutopilotGraphUpdate {
     market: state.market,
     rankedOpportunities: state.rankedOpportunities,
     selectedOpportunity: state.selectedOpportunity,
+    aiAdvisor: state.aiAdvisor,
     policy: state.policy,
     action: state.action,
     decisionHash,
@@ -256,12 +350,14 @@ export function createAutopilotGraph() {
   return new StateGraph(AutopilotStateAnnotation)
     .addNode("observe_market", observeMarketNode)
     .addNode("rank_strategies", rankStrategiesNode)
+    .addNode("ai_advisor", aiAdvisorNode)
     .addNode("policy_check", policyNode)
     .addNode("simulate", simulateNode)
     .addNode("log", logNode)
     .addEdge(START, "observe_market")
     .addEdge("observe_market", "rank_strategies")
-    .addEdge("rank_strategies", "policy_check")
+    .addEdge("rank_strategies", "ai_advisor")
+    .addEdge("ai_advisor", "policy_check")
     .addEdge("policy_check", "simulate")
     .addEdge("simulate", "log")
     .addEdge("log", END)

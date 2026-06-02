@@ -85,6 +85,15 @@ export type ScoredYieldOpportunity = YieldOpportunity & {
   };
 };
 
+export type AiAdvisorSignal = {
+  provider: "llm" | "fallback";
+  model: string;
+  recommendedStrategyId: string;
+  marketSummary: string;
+  riskNotes: string[];
+  confidenceReason: string;
+};
+
 export type AutopilotPolicyInput = {
   enabled: boolean;
   paused: boolean;
@@ -114,6 +123,7 @@ export type AutopilotDecision = {
   market: { opportunities: YieldOpportunity[] };
   rankedOpportunities: ScoredYieldOpportunity[];
   selectedOpportunity: ScoredYieldOpportunity;
+  aiAdvisor: AiAdvisorSignal;
   policy: PolicyDecision;
   action: AutopilotAction;
   decisionHash: `0x${string}`;
