@@ -4,10 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/graph.ts"
+    ".": "./src/graph.ts",
+    "./server": "./src/server.ts",
+    "./relayer": "./src/relayer.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/**/*.test.ts"
