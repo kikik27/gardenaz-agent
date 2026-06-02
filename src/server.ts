@@ -3,6 +3,7 @@ import { runAutopilotTick } from "./autopilot";
 import { loadDeploymentConfig } from "./config/contracts";
 import { anchorDecision } from "./relayer";
 import { executeRealRoute } from "./execution";
+import { logger } from "./logger";
 import type { AutopilotIntent, AutopilotPolicyInput, RiskLevel } from "./types";
 
 const DEFAULT_PROTOCOLS = ["Mantle RWA USDY Route", "Mantle mETH Yield Route", "Mantle Dynamic RWA Route"];
@@ -109,6 +110,7 @@ export function createAgentService() {
 
     try {
       const body = (await readJson(req)) as PlanRequest;
+      logger.info({ user: body.user, amount: body.amount, execute: body.execute ?? false }, "autopilot plan requested");
       const decision = await runAutopilotTick(buildIntent(body), { deployment: loadDeploymentConfig() });
       const anchor = body.anchor === false ? { enabled: false, txHash: null, note: "anchor disabled by request" } : await anchorDecision(decision);
       const execution = body.execute
@@ -133,6 +135,6 @@ const isEntrypoint = process.argv[1] ? import.meta.url === new URL(process.argv[
 if (isEntrypoint) {
   const port = Number(process.env.PORT ?? 8787);
   createAgentService().listen(port, () => {
-    console.log(`Gardena agent service listening on :${port}`);
+    logger.info({ port }, "Gardena agent service listening");
   });
 }
