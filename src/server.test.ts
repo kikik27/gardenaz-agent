@@ -1,8 +1,35 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildGardenRequest, buildIntent, createAgentService, parseAutopilotWorkerConfig } from "./server";
+
+const originalEnv = {
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+  AUTOPILOT_WORKER_ENABLED: process.env.AUTOPILOT_WORKER_ENABLED,
+};
+
+process.env.OPENAI_API_KEY = "";
+delete process.env.OPENAI_BASE_URL;
+process.env.AUTOPILOT_WORKER_ENABLED = "false";
+
+const {
+  buildGardenRequest,
+  buildIntent,
+  createAgentService,
+  parseAutopilotWorkerConfig,
+} = await import("./server");
 
 const user = "0x7777777777777777777777777777777777777777" as const;
+
+function restoreEnv() {
+  if (originalEnv.OPENAI_API_KEY === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = originalEnv.OPENAI_API_KEY;
+
+  if (originalEnv.OPENAI_BASE_URL === undefined) delete process.env.OPENAI_BASE_URL;
+  else process.env.OPENAI_BASE_URL = originalEnv.OPENAI_BASE_URL;
+
+  if (originalEnv.AUTOPILOT_WORKER_ENABLED === undefined) delete process.env.AUTOPILOT_WORKER_ENABLED;
+  else process.env.AUTOPILOT_WORKER_ENABLED = originalEnv.AUTOPILOT_WORKER_ENABLED;
+}
 
 describe("Gardena agent HTTP service", () => {
   it("builds an autopilot intent from app request payload", () => {
@@ -11,10 +38,10 @@ describe("Gardena agent HTTP service", () => {
     assert.equal(intent.mode, "autopilot");
     assert.equal(intent.currentStrategyId, undefined);
     assert.equal(intent.policy.maxRiskLevel, 2);
-    assert.equal(intent.policy.executionAuthority, "wallet");
+    assert.equal(intent.policy.executionAuthority, "managed");
     assert.equal(intent.policy.oracleHeartbeatSeconds, 900);
     assert.ok(intent.policy.allowedProtocols.length >= 1);
-    assert.deepEqual(intent.policy.allowedExecutors, [user]);
+    assert.deepEqual(intent.policy.allowedExecutors, [process.env.RELAYER_EXECUTOR_ADDRESS ?? user]);
     assert.match(intent.policy.allowedProtocols[0] ?? "", /^0x[a-fA-F0-9]{40}$/);
   });
 
@@ -90,7 +117,7 @@ describe("Gardena agent HTTP service", () => {
       assert.match(json.decision.decisionHash, /^0x[0-9a-f]{64}$/);
       assert.equal(json.anchor.enabled, false);
     } finally {
-      service.close();
+      await new Promise<void>((resolve) => service.close(() => resolve()));
     }
   });
 
@@ -119,7 +146,7 @@ describe("Gardena agent HTTP service", () => {
       assert.ok(Array.isArray(json.readiness.benchmarking.notes));
       assert.match(json.readiness.benchmarking.status, /ready|partial|blocked/);
     } finally {
-      service.close();
+      await new Promise<void>((resolve) => service.close(() => resolve()));
     }
   });
 
@@ -155,7 +182,7 @@ describe("Gardena agent HTTP service", () => {
       assert.match(json.result.decision.decisionHash, /^0x[0-9a-f]{64}$/);
       assert.match(json.result.beginnerExplanation, /beginner|safe|USDC|stable/i);
     } finally {
-      service.close();
+      await new Promise<void>((resolve) => service.close(() => resolve()));
     }
   });
 
@@ -185,7 +212,9 @@ describe("Gardena agent HTTP service", () => {
       assert.equal(callJson.ok, true, callJson.error);
       assert.ok(callJson.result.simulation.actionLabel.length > 0);
     } finally {
-      service.close();
+      await new Promise<void>((resolve) => service.close(() => resolve()));
     }
   });
 });
+
+process.on("exit", restoreEnv);

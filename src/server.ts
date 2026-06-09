@@ -413,7 +413,7 @@ export function buildIntent(body: PlanRequest): AutopilotIntent {
   const deployment = loadDeploymentConfig();
   const allowedProtocols = resolveAllowedProtocols(deployment);
   const riskPreference = Number(body.riskPreference || 1) as RiskLevel;
-  const executionAuthority = body.policy?.executionAuthority ?? "wallet";
+  const executionAuthority = body.policy?.executionAuthority ?? "managed";
   const relayerExecutor = process.env.RELAYER_EXECUTOR_ADDRESS;
   return {
     user: body.user,
